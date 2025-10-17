@@ -1,1 +1,42 @@
+import pandas as pd
+import sqlite3
+import yfinance as yf
+from concurrent.futures import ThreadPoolExecutor
 
+# ---------------- Step 1: Download crypto data ----------------
+def fetch_crypto(symbol):
+    data = yf.download(symbol, start="2023-01-01", end="2023-12-31", auto_adjust=True)
+    data.reset_index(inplace=True)
+    data["Symbol"] = symbol
+    return data
+
+symbols = ["BTC-USD", "ETH-USD"]  # At least 2 cryptos
+
+with ThreadPoolExecutor() as executor:
+    results = list(executor.map(fetch_crypto, symbols))
+
+crypto_df = pd.concat(results, ignore_index=True)
+
+# ---------------- Step 2: Store in SQLite database ----------------
+conn = sqlite3.connect("crypto_data.db")
+crypto_df.to_sql("crypto_prices", conn, if_exists="replace", index=False)
+
+# ---------------- Step 3: Calculate metrics (daily returns, volatility) ----------------
+def calc_metrics(symbol):
+    df = crypto_df[crypto_df.Symbol == symbol].copy()
+    df["Return"] = df["Close"].pct_change()  # Use Close instead of Adj Close
+    mean_return = df["Return"].mean()
+    volatility = df["Return"].std()
+    return {"Symbol": symbol, "MeanReturn": mean_return, "Volatility": volatility}
+
+with ThreadPoolExecutor() as executor:
+    metrics = list(executor.map(calc_metrics, symbols))
+
+metrics_df = pd.DataFrame(metrics)
+
+# ---------------- Step 4: Show results ----------------
+print("Crypto Metrics:")
+print(metrics_df)
+
+# Store metrics in DB
+metrics_df.to_sql("crypto_metrics", conn, if_exists="replace", index=False)
