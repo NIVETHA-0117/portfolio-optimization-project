@@ -1,1 +1,113 @@
+Portfolio_math.py
+import pandas as pd
+import numpy as np
+import sqlite3
+from concurrent.futures import ThreadPoolExecutor
+import matplotlib.pyplot as plt
 
+from Db_portfolio import create_tables, insert_portfolio, insert_portfolio_assets
+
+DB_NAME = "crypto_data.db"
+
+# ---------------- Load Data ----------------
+def load_data():
+    conn = sqlite3.connect(DB_NAME)
+    df = pd.read_sql("SELECT * FROM crypto_prices", conn)
+    conn.close()
+    return df
+
+# ---------------- Weighting Rules ----------------
+def assign_weights(rule, symbols, metrics_df):
+    n = len(symbols)
+
+    if rule == "equal":
+        return {s: 1/n for s in symbols}
+
+    elif rule == "risk_based":
+        # lower volatility = higher weight
+        inv_vol = 1 / metrics_df.set_index("Symbol").loc[symbols]["Volatility"]
+        weights = inv_vol / inv_vol.sum()
+        return weights.to_dict()
+
+    elif rule == "performance_based":
+        # higher mean return = higher weight
+        rets = metrics_df.set_index("Symbol").loc[symbols]["MeanReturn"]
+        weights = rets / rets.sum()
+        return weights.to_dict()
+
+    else:
+        raise ValueError("Unknown rule")
+
+# ---------------- Portfolio Calculations ----------------
+def portfolio_metrics(weights, metrics_df):
+    mean_returns = metrics_df.set_index("Symbol")["MeanReturn"]
+    vol = metrics_df.set_index("Symbol")["Volatility"]
+
+    port_return = sum(weights[s] * mean_returns[s] for s in weights)
+    port_risk = np.sqrt(sum((weights[s] * vol[s])**2 for s in weights))  # simplified
+
+    return port_return, port_risk
+
+# ---------------- Run One Rule ----------------
+def run_rule(rule, symbols, metrics_df):
+    weights = assign_weights(rule, symbols, metrics_df)
+    port_return, port_risk = portfolio_metrics(weights, metrics_df)
+
+    # Store in DB
+    portfolio_id = insert_portfolio(rule, port_return, port_risk)
+    assets = [
+        {"Symbol": s, "Weight": w, "AssetReturn": metrics_df.loc[metrics_df.Symbol == s, "MeanReturn"].values[0]}
+        for s, w in weights.items()
+    ]
+    insert_portfolio_assets(portfolio_id, assets)
+
+    return {"Rule": rule, "Return": port_return, "Risk": port_risk, "Weights": weights}
+
+# ---------------- Parallel Execution ----------------
+def run_all_rules(symbols, metrics_df):
+    rules = ["equal", "risk_based", "performance_based"]
+    with ThreadPoolExecutor() as executor:
+        results = list(executor.map(lambda r: run_rule(r, symbols, metrics_df), rules))
+    return results
+
+# ---------------- Comparison vs Single Asset ----------------
+def compare_vs_assets(metrics_df, portfolios):
+    compare_df = metrics_df[["Symbol", "MeanReturn"]].copy()
+    for p in portfolios:
+        compare_df = pd.concat([compare_df, pd.DataFrame([{"Symbol": p["Rule"], "MeanReturn": p["Return"]}])])
+    return compare_df
+
+# ---------------- Plot Results ----------------
+def plot_results(compare_df):
+    plt.figure(figsize=(8,5))
+    plt.bar(compare_df["Symbol"], compare_df["MeanReturn"])
+    plt.xticks(rotation=45)
+    plt.ylabel("Mean Return")
+    plt.title("Portfolio vs Single Asset Returns")
+    plt.show()
+
+# ---------------- Export ----------------
+def export_results(df, filename="portfolio_results.csv"):
+    df.to_csv(filename, index=False)
+
+# ---------------- Main ----------------
+if __name__ == "__main__":
+    create_tables()
+
+    df = load_data()
+    symbols = df["Symbol"].unique().tolist()
+
+    # Load metrics
+    conn = sqlite3.connect(DB_NAME)
+    metrics_df = pd.read_sql("SELECT * FROM crypto_metrics", conn)
+    conn.close()
+
+    # Run rules in parallel
+    portfolios = run_all_rules(symbols, metrics_df)
+
+    # Compare vs assets
+    compare_df = compare_vs_assets(metrics_df, portfolios)
+    print(compare_df)
+    plot_results(compare_df)
+    export_results(compare_df)
+    
