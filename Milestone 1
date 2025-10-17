@@ -40,3 +40,4 @@ print(metrics_df)
 
 # Store metrics in DB
 metrics_df.to_sql("crypto_metrics", conn, if_exists="replace", index=False)
+connc.close()
