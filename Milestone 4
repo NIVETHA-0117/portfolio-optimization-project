@@ -1,1 +1,40 @@
+portfolio_df['MA14'] = btc_X['MA14'] * weights["BTC"] + eth_X['MA14'] * weights["ETH"] + usdc_X['MA14'] * weights["USDC"]
 
+    portfolio_df.dropna(inplace=True)
+    split_ratio = 0.8
+    split_index = int(len(portfolio_df) * split_ratio)
+    X_portfolio = portfolio_df[['Open', 'Prev_Close', 'High', 'Low', 'MA3', 'MA7', 'MA14']]
+    y_portfolio = portfolio_df['Return']
+
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X_portfolio)
+
+    X_train, X_test = X_scaled[:split_index], X_scaled[split_index:]
+    y_train, y_test = y_portfolio.iloc[:split_index], y_portfolio.iloc[split_index:]
+
+    model_portfolio = Ridge(alpha=0.5)
+    model_portfolio.fit(X_train, y_train)
+
+    y_train_pred = model_portfolio.predict(X_train)
+    y_test_pred = model_portfolio.predict(X_test)
+
+    portfolio_df['Predicted'] = np.nan
+    portfolio_df.iloc[split_index:, portfolio_df.columns.get_loc('Predicted')] = y_test_pred
+
+    print("\n=== PORTFOLIO ===")
+    print(f"Train R² Score: {model_portfolio.score(X_train, y_train):.4f}")
+    print(f"Test R² Score: {model_portfolio.score(X_test, y_test):.4f}")
+    print(f"Train MSE: {mean_squared_error(y_train, y_train_pred):.6f}")
+    print(f"Test MSE: {mean_squared_error(y_test, y_test_pred):.6f}")
+    print(f"Last Actual Return: {y_portfolio.iloc[-1]:.4%}")
+    print(f"Last Predicted Return: {portfolio_df['Predicted'].iloc[-1]:.4%}")
+
+    # Separate portfolio plot
+    plt.figure(figsize=(6, 4))
+    plt.scatter(y_test, y_test_pred, alpha=0.6)
+    plt.plot([y_portfolio.min(), y_portfolio.max()], [y_portfolio.min(), y_portfolio.max()], color='red', linewidth=2)
+    plt.xlabel("Actual Returns")
+    plt.ylabel("Predicted Returns")
+    plt.title("Portfolio Predicted vs Actual Returns")
+    plt.grid(True)
+    plt.show()
